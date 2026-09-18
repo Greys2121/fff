@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ad break player</title>
+<style>
+  :root{
+    --void:#0a0d14;
+    --shell:#141b26;
+    --shell-2:#1c2533;
+    --line:#2c3a4d;
+    --text:#e9eff6;
+    --dim:#8fa1b6;
+    --accent:#ff7a59;
+    --go:#4ade9b;
+    --mini-w:340px;
+    --mini-scale:.25;
+    --mini-h:200px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--void);color:var(--text);overflow:hidden;
+    font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-reduced-motion:reduce){ *{transition-duration:.01ms !important} }
+
+  /* ---------- the embedded site ---------- */
+  /* Transformed, never re-parented — moving an iframe in the DOM reloads it. */
+  #stageWrap{
+    position:fixed;inset:0;overflow:hidden;background:#fff;
+    transform-origin:100% 0;
+    transition:transform .55s cubic-bezier(.22,.9,.24,1), border-radius .4s ease, box-shadow .4s ease;
+    will-change:transform;
+  }
+  #frame{width:100%;height:100%;border:0;display:block}
+  body.break #stageWrap{
+    transform:translate(-20px,20px) scale(var(--mini-scale));
+    border-radius:calc(14px / var(--mini-scale));
+    box-shadow:0 0 0 calc(2px / var(--mini-scale)) rgba(255,122,89,.85),
+               0 calc(30px / var(--mini-scale)) calc(70px / var(--mini-scale)) rgba(0,0,0,.6);
+  }
+  /* Swallows clicks and keystrokes so a game underneath can't be played blind. */
+  #guard{position:fixed;inset:0;z-index:20;display:none;cursor:not-allowed}
+  body.break #guard{display:block}
+
+  #blackout{
+    position:fixed;inset:0;z-index:15;background:var(--void);opacity:0;
+    transition:opacity .45s ease;pointer-events:none;
+  }
+  body.break #blackout{opacity:1}
+
+  /* ---------- warning toast ---------- */
+  #warn{
+    position:fixed;top:20px;right:20px;z-index:60;width:var(--mini-w);max-width:calc(100vw - 40px);
+    background:rgba(20,27,38,.94);border:1px solid var(--line);border-radius:12px;
+    padding:13px 15px;box-shadow:0 20px 50px rgba(0,0,0,.5);
+    transform:translateY(-14px);opacity:0;pointer-events:none;
+    transition:opacity .3s ease, transform .3s ease;backdrop-filter:blur(8px);
+  }
+  #warn.up{opacity:1;transform:none}
+  #warn .line{display:flex;align-items:baseline;gap:8px}
+  #warn strong{font-size:14px;font-weight:600;letter-spacing:-.01em}
+  #warn .num{margin-left:auto;font-size:20px;font-weight:650;color:var(--accent);font-variant-numeric:tabular-nums}
+  #warn p{margin:4px 0 9px;font-size:12.5px;color:var(--dim);line-height:1.45}
+  #warn .track{height:3px;background:var(--shell-2);border-radius:3px;overflow:hidden}
+  #warn .fill{height:100%;background:var(--accent);width:100%;transform-origin:left}
+
+  /* ---------- ad surface ---------- */
+  #adWrap{
+    position:fixed;z-index:30;left:0;right:0;top:0;bottom:0;
+    display:none;align-items:center;justify-content:center;padding:24px;
+  }
+  body.break #adWrap{display:flex}
+  #adStage{
+    width:min(780px,calc(100vw - 48px));max-height:calc(100vh - 48px);
+    display:flex;flex-direction:column;gap:14px;align-items:center;
+  }
+  #adSurface{
+    width:100%;background:#0f141d;border-radius:14px;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;min-height:200px;
+    border:1px solid #1e2836;
+  }
+  #adSurface video{width:100%;max-height:min(58vh,440px);display:block;background:#000}
+  #adSurface img{width:100%;max-height:min(58vh,440px);object-fit:contain;display:block}
+  .adcard{padding:36px 32px;text-align:center;max-width:52ch}
+  .adcard h2{margin:0 0 10px;font-size:25px;line-height:1.2;letter-spacing:-.015em;font-weight:650}
+  .adcard p{margin:0 0 20px;font-size:15px;line-height:1.55;color:var(--dim)}
+  .adcard a{
+    display:inline-block;padding:11px 22px;border-radius:9px;background:var(--accent);
+    color:#2a0d04;text-decoration:none;font-size:14px;font-weight:650;
+  }
+  #adBar{
+    width:100%;display:flex;align-items:center;gap:14px;
+    font-size:13px;color:var(--dim);
+  }
+  #adBar .label{letter-spacing:.01em}
+  #adBar .track{flex:1;height:4px;background:#222c3a;border-radius:4px;overflow:hidden}
+  #adBar .fill{height:100%;width:0;background:var(--accent)}
+  #adBar .count{font-variant-numeric:tabular-nums;color:var(--text);font-weight:600;min-width:6ch;text-align:right}
+  #skip{
+    padding:8px 15px;border:1px solid var(--line);border-radius:8px;background:transparent;
+    color:var(--text);font:inherit;font-size:13px;cursor:pointer;
+  }
+  #skip[disabled]{opacity:.4;cursor:default}
+  #skip:not([disabled]):hover{border-color:var(--accent);color:var(--accent)}
+
+  /* ---------- mini player chrome ---------- */
+  #miniTag{
+    position:fixed;z-index:50;right:20px;
+    top:calc(20px + var(--mini-h) + 9px);
+    width:var(--mini-w);display:none;align-items:center;gap:8px;
+    font-size:12px;color:var(--dim);
+  }
+  body.break #miniTag{display:flex}
+  #miniTag .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  #miniTag .dot.live{background:var(--go);animation:pulse 1.8s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  #miniTag button{
+    margin-left:auto;padding:3px 9px;border:1px solid var(--line);border-radius:6px;
+    background:rgba(20,27,38,.8);color:var(--dim);font:inherit;font-size:11.5px;cursor:pointer;
+  }
+  #miniTag button:hover{color:var(--text)}
+
+  /* ---------- operator dock ---------- */
+  #dock{
+    position:fixed;left:16px;bottom:16px;z-index:70;display:flex;align-items:center;gap:10px;
+    padding:8px 9px 8px 14px;border:1px solid var(--line);border-radius:999px;
+    background:rgba(20,27,38,.93);box-shadow:0 14px 36px rgba(0,0,0,.45);backdrop-filter:blur(8px);
+    font-size:12.5px;
+  }
+  #dock .next{color:var(--dim);font-variant-numeric:tabular-nums}
+  #dock .next b{color:var(--text);font-weight:600}
+  #dock .link{width:1px;height:18px;background:var(--line)}
+  #dock button{
+    padding:6px 12px;border:1px solid transparent;border-radius:999px;background:var(--shell-2);
+    color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;
+  }
+  #dock button:hover{background:#26344a}
+  #dock .conn{display:flex;align-items:center;gap:6px;color:var(--dim)}
+  #dock .conn i{width:7px;height:7px;border-radius:50%;background:#6b7a8d;font-style:normal}
+  #dock .conn.ok i{background:var(--go)}
+  body.kiosk #dock{display:none}
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{
+    outline:2px solid var(--accent);outline-offset:2px
+  }
+
+  /* ---------- settings ---------- */
+  #panel{
+    position:fixed;top:0;right:0;bottom:0;width:min(430px,100vw);z-index:90;
+    background:var(--shell);border-left:1px solid var(--line);
+    transform:translateX(100%);transition:transform .24s ease;
+    display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.5);
+  }
+  #panel.open{transform:none}
+  #panel header{padding:18px 20px 15px;border-bottom:1px solid var(--line)}
+  #panel h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.01em}
+  #panel header p{margin:5px 0 0;font-size:12.5px;color:var(--dim);line-height:1.5}
+  #panel .body{padding:18px 20px 26px;overflow:auto;flex:1}
+  #panel footer{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
+  fieldset{border:0;padding:0;margin:0 0 22px}
+  legend{font-size:12.5px;color:var(--accent);margin-bottom:10px;font-weight:600}
+  label{display:block;font-size:12.5px;color:var(--dim);margin:0 0 5px}
+  input[type=text],input[type=url],input[type=number],select,textarea{
+    width:100%;padding:8px 10px;background:var(--shell-2);color:var(--text);
+    border:1px solid var(--line);border-radius:7px;font:inherit;font-size:13px;
+  }
+  textarea{min-height:120px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.55}
+  .field{margin-bottom:12px}
+  .row{display:flex;gap:10px}
+  .row .field{flex:1}
+  .toggle{display:flex;align-items:center;gap:9px;margin:0 0 9px;color:var(--text);font-size:13px;cursor:pointer}
+  .toggle input{accent-color:var(--accent);width:15px;height:15px}
+  .note{font-size:12px;color:var(--dim);line-height:1.55;margin:7px 0 0}
+  .note code{background:var(--shell-2);padding:.12em .38em;border-radius:5px;color:var(--text);font-size:11.5px}
+  button.go{padding:9px 17px;border:0;border-radius:8px;background:var(--accent);color:#2a0d04;font:inherit;font-size:13px;font-weight:650;cursor:pointer}
+  button.quiet{padding:9px 15px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font:inherit;font-size:13px;cursor:pointer}
+  #note{font-size:12px;color:var(--dim);margin-left:auto;text-align:right;line-height:1.4}
+  details{margin-top:10px}
+  summary{cursor:pointer;font-size:12.5px;color:var(--dim)}
+  pre{background:var(--shell-2);border:1px solid var(--line);border-radius:8px;padding:11px;
+      overflow:auto;font-size:11px;line-height:1.55;color:#c2d2e3;margin:9px 0 0}
+</style>
+</head>
+<body>
+
+<div id="stageWrap">
+  <iframe id="frame" title="Embedded site" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write"></iframe>
+</div>
+
+<div id="blackout"></div>
+<div id="guard" aria-hidden="true"></div>
+
+<div id="warn" role="status">
+  <div class="line">
+    <strong>Ad break starting</strong>
+    <span class="num" id="warnNum">10</span>
+  </div>
+  <p id="warnBody">Your place is held. Playback keeps running in the corner.</p>
+  <div class="track"><div class="fill" id="warnFill"></div></div>
+</div>
+
+<div id="adWrap">
+  <div id="adStage">
+    <div id="adSurface"></div>
+    <div id="adBar">
+      <span class="label">Advertisement</span>
+      <span class="track"><span class="fill" id="adFill"></span></span>
+      <span class="count" id="adCount">0:30</span>
+      <button id="skip" type="button" disabled>Skip</button>
+    </div>
+  </div>
+</div>
+
+<div id="miniTag">
+  <span class="dot" id="miniDot"></span>
+  <span id="miniText">Paused</span>
+  <button id="miniMute" type="button">Mute</button>
+</div>
+
+<div id="dock">
+  <span class="next">Next break in <b id="nextIn">--:--</b></span>
+  <span class="link"></span>
+  <span class="conn" id="conn"><i></i><span id="connText">No content control</span></span>
+  <span class="link"></span>
+  <button id="breakNow" type="button">Play break</button>
+  <button id="openPanel" type="button">Settings</button>
+</div>
+
+<aside id="panel">
+  <header>
+    <h1>Break settings</h1>
+    <p>Schedule, behaviour during the break, and what plays in the ad slot.</p>
+  </header>
+
+  <div class="body">
+    <fieldset>
+      <legend>Site</legend>
+      <div class="field">
+        <label for="embedUrl">Address to embed</label>
+        <input id="embedUrl" type="url" autocomplete="off">
+      </div>
+      <p class="note">Vercel preview URLs with deployment protection turned on will show a login wall instead of your
+        app. If the frame is blank, check Project Settings &rarr; Deployment Protection, or use your production domain.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Schedule</legend>
+      <div class="row">
+        <div class="field">
+          <label for="intervalMin">Minutes between breaks</label>
+          <input id="intervalMin" type="number" min="1" step="1" value="15">
+        </div>
+        <div class="field">
+          <label for="adSec">Break length (seconds)</label>
+          <input id="adSec" type="number" min="5" step="1" value="30">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="warnSec">Warning lead (seconds)</label>
+          <input id="warnSec" type="number" min="0" step="1" value="10">
+        </div>
+        <div class="field">
+          <label for="skipAfter">Skip allowed after (0 = never)</label>
+          <input id="skipAfter" type="number" min="0" step="1" value="0">
+        </div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="firstDelay"> First break waits a full interval</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>During the break</legend>
+      <label class="toggle"><input type="checkbox" id="mini" checked> Shrink the site to a corner mini player</label>
+      <label class="toggle"><input type="checkbox" id="pause" checked> Tell the site to pause (needs the client script)</label>
+      <label class="toggle"><input type="checkbox" id="muteMini"> Mute the site while the ad plays</label>
+      <p class="note">Pausing and muting only work if <code>adbreak-client.js</code> is running inside your app.
+        Browsers block a parent page from reaching into a cross-origin frame, so there is no way around that part.</p>
+      <details>
+        <summary>The script your app needs</summary>
+        <pre id="snippet">Save adbreak-client.js to /public in your repo, then add this to your root layout:
+
+  &lt;script src="/adbreak-client.js" defer&gt;&lt;/script&gt;
+
+Push to GitHub. Vercel redeploys and the dock below will say "Content control ready".
+
+For games and custom players, pause on the event it fires:
+
+  window.addEventListener('adbreak', (e) =&gt; {
+    if (e.detail.state === 'start') game.pause();
+    else game.resume();
+  });</pre>
+      </details>
+    </fieldset>
+
+    <fieldset>
+      <legend>Ad slot</legend>
+      <div class="field">
+        <label for="source">What plays</label>
+        <select id="source">
+          <option value="inline">Creatives written below</option>
+          <option value="feed">Fetched from a URL</option>
+          <option value="tag">Third-party ad tag</option>
+        </select>
+      </div>
+      <div class="field" id="feedField" hidden>
+        <label for="feedUrl">Feed address (JSON, CORS enabled)</label>
+        <input id="feedUrl" type="url" autocomplete="off" placeholder="https://example.com/breaks.json">
+      </div>
+      <div class="field" id="inlineField">
+        <label for="creatives">Creatives</label>
+        <textarea id="creatives" spellcheck="false"></textarea>
+        <details>
+          <summary>Fields</summary>
+          <pre>video     mp4 address — plays for its own length
+image     still image shown for the break length
+headline  text card headline
+body      supporting line
+cta       button text
+href      click destination
+weight    pick frequency, default 1
+impressionUrl / clickUrl   optional tracking beacons</pre>
+        </details>
+      </div>
+      <div class="field" id="tagField" hidden>
+        <label for="tagHtml">Ad tag markup</label>
+        <textarea id="tagHtml" spellcheck="false"></textarea>
+        <p class="note">For real 30-second video inventory you want a VAST tag through Google's IMA SDK rather than a
+          display tag. Note that AdSense forbids ads placed around a framed page — if you want programmatic money,
+          put the ad code inside the Vercel app itself, not in this wrapper.</p>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Launch link</legend>
+      <p class="note">Settings travel in the address bar:
+        <code>?url=…&amp;every=15&amp;len=30&amp;warn=10&amp;kiosk=1</code>. Kiosk hides the dock.
+        Press <b>S</b> for settings, <b>B</b> to fire a break.</p>
+      <button class="quiet" id="copyLink" type="button" style="margin-top:10px">Copy launch link</button>
+    </fieldset>
+  </div>
+
+  <footer>
+    <button class="go" id="apply" type="button">Apply</button>
+    <button class="quiet" id="closePanel" type="button">Close</button>
+    <span id="note"></span>
+  </footer>
+</aside>
+
+<script>
+(function(){
+  'use strict';
+
+  var SAMPLE = [
+    { headline:'This spot is open',
+      body:'Drop a video address, an image, or an ad tag in settings and it plays here every break.',
+      cta:'Open settings', href:'' }
+  ];
+
+  var DEFAULTS = {
+    embedUrl:'https://lgbtqhappiness-git-main-echos-games.vercel.app',
+    intervalMin:15,
+    adSec:30,
+    warnSec:10,
+    skipAfter:0,
+    firstDelay:false,
+    mini:true,
+    pause:true,
+    muteMini:false,
+    source:'inline',
+    feedUrl:'',
+    tagHtml:'',
+    creatives:SAMPLE
+  };
+
+  var cfg = assign({}, DEFAULTS);
+  var pool = [];
+  var state = 'idle';           // idle | warning | break
+  var nextAt = 0;
+  var breakEndsAt = 0;
+  var breakStartedAt = 0;
+  var lastId = null;
+  var connected = false;
+  var muted = false;
+  var memoryOnly = false;
+  var tick = null;
+  var currentVideo = null;
+
+  var d = document;
+  function $(id){ return d.getElementById(id); }
+  function assign(t){ for (var i=1;i<arguments.length;i++){ var s=arguments[i]; for (var k in s) if (Object.prototype.hasOwnProperty.call(s,k)) t[k]=s[k]; } return t; }
+  function clamp(n,lo,hi){ return Math.max(lo, Math.min(hi, n)); }
+  function mmss(ms){
+    var t = Math.max(0, Math.ceil(ms/1000));
+    return Math.floor(t/60) + ':' + String(t%60).padStart(2,'0');
+  }
+
+  var frame = $('frame');
+
+  /* ---------------- storage ---------------- */
+
+  function load(){
+    try{
+      if (window.storage && window.storage.get){
+        return window.storage.get('adbreak:config', false)
+          .then(function(r){ return r && r.value ? JSON.parse(r.value) : null; })
+          .catch(function(){ return null; });
+      }
+    }catch(e){}
+    memoryOnly = true;
+    return Promise.resolve(null);
+  }
+  function save(){
+    try{
+      if (window.storage && window.storage.set){
+        return window.storage.set('adbreak:config', JSON.stringify(cfg), false).catch(function(){ memoryOnly = true; });
+      }
+    }catch(e){}
+    memoryOnly = true;
+    return Promise.resolve();
+  }
+
+  /* ---------------- url params ---------------- */
+
+  function fromParams(){
+    var p = new URLSearchParams(location.search);
+    if (p.get('url'))   cfg.embedUrl = p.get('url');
+    if (p.get('every')) cfg.intervalMin = clamp(parseFloat(p.get('every')) || 15, .2, 720);
+    if (p.get('len'))   cfg.adSec = clamp(parseInt(p.get('len'),10) || 30, 5, 600);
+    if (p.get('warn'))  cfg.warnSec = clamp(parseInt(p.get('warn'),10) || 0, 0, 120);
+    if (p.get('ads'))   { cfg.feedUrl = p.get('ads'); cfg.source = 'feed'; }
+    if (p.get('kiosk') === '1') d.body.classList.add('kiosk');
+  }
+
+  function launchLink(){
+    var p = new URLSearchParams();
+    if (cfg.embedUrl) p.set('url', cfg.embedUrl);
+    p.set('every', cfg.intervalMin);
+    p.set('len', cfg.adSec);
+    p.set('warn', cfg.warnSec);
+    if (cfg.source === 'feed' && cfg.feedUrl) p.set('ads', cfg.feedUrl);
+    p.set('kiosk','1');
+    return location.origin + location.pathname + '?' + p.toString();
+  }
+
+  /* ---------------- iframe + handshake ---------------- */
+
+  function mount(){
+    if (!cfg.embedUrl){ frame.removeAttribute('src'); return; }
+    connected = false;
+    paintConn();
+    frame.src = cfg.embedUrl;
+  }
+
+  function origin(){
+    try { return new URL(cfg.embedUrl).origin; } catch(e){ return '*'; }
+  }
+
+  function send(type, extra){
+    if (!frame.contentWindow) return;
+    var msg = assign({ type:type }, extra || {});
+    try { frame.contentWindow.postMessage(msg, origin()); } catch(e){}
+    // Preview deployments sometimes serve from a redirected origin.
+    try { frame.contentWindow.postMessage(msg, '*'); } catch(e){}
+  }
+
+  window.addEventListener('message', function(e){
+    var m = e.data;
+    if (!m || typeof m !== 'object' || typeof m.type !== 'string') return;
+    if (m.type === 'adbreak:hello' || m.type === 'adbreak:pong' || m.type === 'adbreak:ack'){
+      if (!connected){ connected = true; paintConn(); }
+    }
+  });
+
+  frame.addEventListener('load', function(){
+    setTimeout(function(){ send('adbreak:ping'); }, 400);
+    setTimeout(function(){ send('adbreak:ping'); }, 1600);
+  });
+
+  function paintConn(){
+    $('conn').classList.toggle('ok', connected);
+    $('connText').textContent = connected ? 'Content control ready' : 'No content control';
+  }
+
+  /* ---------------- creatives ---------------- */
+
+  function normalize(list){
+    if (!Array.isArray(list)) return [];
+    return list.filter(function(c){ return c && typeof c === 'object'; }).map(function(c,i){
+      return {
+        id: c.id || ('break-'+i),
+        video: c.video || '',
+        image: c.image || '',
+        headline: c.headline || '',
+        body: c.body || '',
+        cta: c.cta || '',
+        href: c.href || '',
+        weight: Number(c.weight) > 0 ? Number(c.weight) : 1,
+        impressionUrl: c.impressionUrl || '',
+        clickUrl: c.clickUrl || ''
+      };
+    });
+  }
+
+  function loadPool(){
+    if (cfg.source === 'tag'){ pool = []; return Promise.resolve(); }
+    if (cfg.source === 'feed' && cfg.feedUrl){
+      return fetch(cfg.feedUrl, {cache:'no-store'})
+        .then(function(r){ if(!r.ok) throw new Error('feed returned '+r.status); return r.json(); })
+        .then(function(data){
+          pool = normalize(Array.isArray(data) ? data : (data && data.ads) || []);
+          setNote(pool.length + ' creative' + (pool.length===1?'':'s'));
+        })
+        .catch(function(err){ pool = []; setNote('Feed failed: '+err.message); });
+    }
+    pool = normalize(cfg.creatives);
+    setNote(pool.length + ' creative' + (pool.length===1?'':'s'));
+    return Promise.resolve();
+  }
+
+  function pick(){
+    if (!pool.length) return null;
+    if (pool.length === 1) return pool[0];
+    var bag = [];
+    pool.forEach(function(c){ for (var i=0;i<c.weight;i++) bag.push(c); });
+    var c, guard = 0;
+    do { c = bag[Math.floor(Math.random()*bag.length)]; guard++; } while (c.id === lastId && guard < 12);
+    lastId = c.id;
+    return c;
+  }
+
+  function beacon(url){
+    if (!url) return;
+    try { (new Image(1,1)).src = url; } catch(e){}
+  }
+
+  /* ---------------- mini player sizing ---------------- */
+
+  function sizeMini(){
+    var w = clamp(window.innerWidth * 0.30, 200, 360);
+    var scale = w / window.innerWidth;
+    var h = window.innerHeight * scale;
+    var root = d.documentElement.style;
+    root.setProperty('--mini-scale', scale.toFixed(4));
+    root.setProperty('--mini-w', Math.round(w) + 'px');
+    root.setProperty('--mini-h', Math.round(h) + 'px');
+  }
+  window.addEventListener('resize', sizeMini);
+
+  /* ---------------- ad rendering ---------------- */
+
+  function renderTag(){
+    var host = $('adSurface');
+    host.innerHTML = '';
+    var box = d.createElement('div');
+    box.style.padding = '14px';
+    box.style.width = '100%';
+    host.appendChild(box);
+    var staging = d.createElement('div');
+    staging.innerHTML = cfg.tagHtml;
+    Array.prototype.slice.call(staging.childNodes).forEach(function(node){
+      if (node.tagName === 'SCRIPT'){
+        var s = d.createElement('script');
+        Array.prototype.slice.call(node.attributes).forEach(function(a){ s.setAttribute(a.name, a.value); });
+        s.text = node.text;
+        box.appendChild(s);
+      } else {
+        box.appendChild(node);
+      }
+    });
+    return cfg.adSec * 1000;
+  }
+
+  function renderCreative(c){
+    var host = $('adSurface');
+    host.innerHTML = '';
+    currentVideo = null;
+    var span = cfg.adSec * 1000;
+
+    if (c.video){
+      var v = d.createElement('video');
+      v.src = c.video;
+      v.autoplay = true;
+      v.playsInline = true;
+      v.controls = false;
+      v.muted = false;
+      host.appendChild(v);
+      currentVideo = v;
+      v.addEventListener('loadedmetadata', function(){
+        if (isFinite(v.duration) && v.duration > 1){
+          span = v.duration * 1000;
+          breakEndsAt = breakStartedAt + span;
+        }
+      });
+      v.addEventListener('ended', function(){ endBreak(); });
+      var p = v.play();
+      if (p && p.catch) p.catch(function(){ v.muted = true; v.play().catch(function(){}); });
+      if (c.href){
+        v.style.cursor = 'pointer';
+        v.addEventListener('click', function(){ beacon(c.clickUrl); window.open(c.href,'_blank','noopener'); });
+      }
+    } else if (c.image){
+      var img = d.createElement('img');
+      img.src = c.image; img.alt = c.headline || '';
+      if (c.href){
+        var a = d.createElement('a');
+        a.href = c.href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.style.display = 'block'; a.style.width = '100%';
+        a.addEventListener('click', function(){ beacon(c.clickUrl); });
+        a.appendChild(img); host.appendChild(a);
+      } else {
+        host.appendChild(img);
+      }
+    } else {
+      var card = d.createElement('div');
+      card.className = 'adcard';
+      if (c.headline){ var h = d.createElement('h2'); h.textContent = c.headline; card.appendChild(h); }
+      if (c.body){ var pEl = d.createElement('p'); pEl.textContent = c.body; card.appendChild(pEl); }
+      if (c.cta){
+        var btn = d.createElement('a');
+        btn.textContent = c.cta;
+        btn.href = c.href || '#';
+        if (c.href){ btn.target = '_blank'; btn.rel = 'noopener noreferrer'; }
+        btn.addEventListener('click', function(ev){
+          if (!c.href){ ev.preventDefault(); openPanel(); return; }
+          beacon(c.clickUrl);
+        });
+        card.appendChild(btn);
+      }
+      host.appendChild(card);
+    }
+
+    beacon(c.impressionUrl);
+    return span;
+  }
+
+  /* ---------------- break lifecycle ---------------- */
+
+  function schedule(fromNow){
+    nextAt = Date.now() + (fromNow != null ? fromNow : cfg.intervalMin * 60000);
+  }
+
+  function showWarning(){
+    if (state !== 'idle') return;
+    state = 'warning';
+    $('warnBody').textContent = cfg.mini
+      ? 'Your place is held. The site shrinks to the corner.'
+      : 'Playback pauses and picks up right where you left it.';
+    $('warn').classList.add('up');
+  }
+
+  function hideWarning(){
+    $('warn').classList.remove('up');
+  }
+
+  function startBreak(){
+    if (state === 'break') return;
+    hideWarning();
+    state = 'break';
+    breakStartedAt = Date.now();
+
+    sizeMini();
+    d.body.classList.toggle('mini-off', !cfg.mini);
+    if (!cfg.mini) d.documentElement.style.setProperty('--mini-scale','0.0001');
+    d.body.classList.add('break');
+
+    if (cfg.pause) send('adbreak:start');
+    if (cfg.muteMini && !cfg.pause) { send('adbreak:mute', {value:true}); muted = true; }
+
+    $('miniDot').classList.toggle('live', !cfg.pause || !connected);
+    $('miniText').textContent = (cfg.pause && connected) ? 'Paused — resumes after the ad' : 'Still running';
+    $('miniMute').textContent = muted ? 'Unmute' : 'Mute';
+    $('miniMute').hidden = !connected;
+
+    var span = cfg.source === 'tag' ? renderTag() : (function(){
+      var c = pick();
+      return c ? renderCreative(c) : cfg.adSec * 1000;
+    })();
+
+    breakEndsAt = breakStartedAt + span;
+
+    var skip = $('skip');
+    skip.disabled = true;
+    skip.hidden = !cfg.skipAfter;
+  }
+
+  function endBreak(){
+    if (state !== 'break') return;
+    state = 'idle';
+    d.body.classList.remove('break');
+    d.documentElement.style.removeProperty('--mini-scale');
+    sizeMini();
+
+    if (currentVideo){ try { currentVideo.pause(); } catch(e){} currentVideo = null; }
+    setTimeout(function(){ if (state === 'idle') $('adSurface').innerHTML = ''; }, 500);
+
+    if (cfg.pause) send('adbreak:end');
+    if (muted){ send('adbreak:mute', {value:false}); muted = false; }
+
+    schedule();
+  }
+
+  function loop(){
+    var now = Date.now();
+
+    if (state === 'break'){
+      var left = breakEndsAt - now;
+      var total = breakEndsAt - breakStartedAt;
+      $('adCount').textContent = mmss(left);
+      $('adFill').style.width = clamp(100 * (1 - left/total), 0, 100) + '%';
+      var skip = $('skip');
+      if (cfg.skipAfter && (now - breakStartedAt) >= cfg.skipAfter*1000 && skip.disabled){
+        skip.disabled = false;
+        skip.textContent = 'Skip ad';
+      }
+      if (left <= 0) endBreak();
+      $('nextIn').textContent = 'now';
+      return;
+    }
+
+    var until = nextAt - now;
+    $('nextIn').textContent = mmss(until);
+
+    if (state === 'warning'){
+      var lead = cfg.warnSec * 1000;
+      $('warnNum').textContent = Math.max(0, Math.ceil(until/1000));
+      $('warnFill').style.transform = 'scaleX(' + clamp(until/lead, 0, 1) + ')';
+      if (until <= 0) startBreak();
+      return;
+    }
+
+    if (cfg.warnSec > 0 && until <= cfg.warnSec*1000){ showWarning(); return; }
+    if (until <= 0) startBreak();
+  }
+
+  /* ---------------- settings plumbing ---------------- */
+
+  function setNote(msg){ $('note').textContent = msg + (memoryOnly ? ' · not saved' : ''); }
+
+  function toForm(){
+    $('embedUrl').value = cfg.embedUrl;
+    $('intervalMin').value = cfg.intervalMin;
+    $('adSec').value = cfg.adSec;
+    $('warnSec').value = cfg.warnSec;
+    $('skipAfter').value = cfg.skipAfter;
+    $('firstDelay').checked = !!cfg.firstDelay;
+    $('mini').checked = !!cfg.mini;
+    $('pause').checked = !!cfg.pause;
+    $('muteMini').checked = !!cfg.muteMini;
+    $('source').value = cfg.source;
+    $('feedUrl').value = cfg.feedUrl;
+    $('tagHtml').value = cfg.tagHtml;
+    $('creatives').value = JSON.stringify(cfg.creatives, null, 2);
+    syncSource();
+  }
+
+  function fromForm(){
+    var url = $('embedUrl').value.trim();
+    var changed = url !== cfg.embedUrl;
+    cfg.embedUrl = url;
+    cfg.intervalMin = clamp(parseFloat($('intervalMin').value) || 15, .2, 720);
+    cfg.adSec = clamp(parseInt($('adSec').value,10) || 30, 5, 600);
+    cfg.warnSec = clamp(parseInt($('warnSec').value,10) || 0, 0, 120);
+    cfg.skipAfter = clamp(parseInt($('skipAfter').value,10) || 0, 0, 600);
+    cfg.firstDelay = $('firstDelay').checked;
+    cfg.mini = $('mini').checked;
+    cfg.pause = $('pause').checked;
+    cfg.muteMini = $('muteMini').checked;
+    cfg.source = $('source').value;
+    cfg.feedUrl = $('feedUrl').value.trim();
+    cfg.tagHtml = $('tagHtml').value;
+    var raw = $('creatives').value.trim();
+    if (raw){
+      try{
+        var parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('needs to be a list');
+        cfg.creatives = parsed;
+      }catch(err){ setNote('Creatives JSON: '+err.message); return null; }
+    } else { cfg.creatives = []; }
+    return { urlChanged: changed };
+  }
+
+  function syncSource(){
+    var s = $('source').value;
+    $('feedField').hidden = s !== 'feed';
+    $('inlineField').hidden = s !== 'inline';
+    $('tagField').hidden = s !== 'tag';
+  }
+
+  function openPanel(){ $('panel').classList.add('open'); $('embedUrl').focus(); }
+  function closePanel(){ $('panel').classList.remove('open'); }
+  function togglePanel(){ $('panel').classList.contains('open') ? closePanel() : openPanel(); }
+
+  /* ---------------- wiring ---------------- */
+
+  $('openPanel').addEventListener('click', togglePanel);
+  $('closePanel').addEventListener('click', closePanel);
+  $('source').addEventListener('change', syncSource);
+  $('breakNow').addEventListener('click', function(){ hideWarning(); state='idle'; startBreak(); });
+  $('skip').addEventListener('click', function(){ if (!this.disabled) endBreak(); });
+
+  $('miniMute').addEventListener('click', function(){
+    muted = !muted;
+    send('adbreak:mute', {value:muted});
+    this.textContent = muted ? 'Unmute' : 'Mute';
+  });
+
+  $('apply').addEventListener('click', function(){
+    var res = fromForm();
+    if (!res) return;
+    if (res.urlChanged) mount();
+    loadPool().then(function(){
+      if (state === 'break') endBreak(); else { hideWarning(); state='idle'; schedule(); }
+      save();
+      closePanel();
+    });
+  });
+
+  $('copyLink').addEventListener('click', function(){
+    if (!fromForm()) return;
+    var btn = this, link = launchLink();
+    function done(t){ btn.textContent = t; setTimeout(function(){ btn.textContent='Copy launch link'; }, 1800); }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(link).then(function(){ done('Copied'); }, function(){ done('Copy failed'); });
+    } else done('Copy failed');
+  });
+
+  d.addEventListener('keydown', function(e){
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(d.activeElement.tagName);
+    if (e.key === 'Escape'){ togglePanel(); return; }
+    if (typing) return;
+    if (e.key === 's' || e.key === 'S') togglePanel();
+    if (e.key === 'b' || e.key === 'B'){ hideWarning(); state='idle'; startBreak(); }
+  });
+
+  // Keystrokes must not reach a game running underneath the ad.
+  d.addEventListener('keydown', function(e){
+    if (state !== 'break') return;
+    if ($('panel').classList.contains('open')) return;
+    if (e.key === 'Escape' || e.key === 'Tab') return;
+    e.stopPropagation();
+  }, true);
+
+  /* ---------------- boot ---------------- */
+
+  load().then(function(saved){
+    if (saved && typeof saved === 'object'){
+      Object.keys(DEFAULTS).forEach(function(k){ if (saved[k] !== undefined) cfg[k] = saved[k]; });
+    }
+    fromParams();
+    toForm();
+    sizeMini();
+    mount();
+    return loadPool();
+  }).then(function(){
+    schedule(cfg.firstDelay ? cfg.intervalMin*60000 : cfg.intervalMin*60000);
+    paintConn();
+    tick = setInterval(loop, 200);
+    loop();
+  });
+})();
+</script>
+</body>
+</html>
