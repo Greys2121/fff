@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Echo's Games</title>
+<style>
+  :root{
+    --void:#0a0d14;
+    --text:#e9eff6;
+    --dim:#93a4b8;
+    --accent:#ff7a59;
+    --mini-w:340px;
+    --mini-h:200px;
+    --mini-scale:.28;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--void);color:var(--text);overflow:hidden;
+    font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-reduced-motion:reduce){ *{transition-duration:.01ms !important;animation:none !important} }
+
+  /* The site. Transformed, never re-parented — moving an iframe reloads it. */
+  #stageWrap{
+    position:fixed;inset:0;overflow:hidden;background:#fff;
+    transform-origin:100% 0;
+    transition:transform .55s cubic-bezier(.22,.9,.24,1), border-radius .4s, box-shadow .4s;
+    will-change:transform;
+  }
+  #frame{width:100%;height:100%;border:0;display:block}
+
+  /* Above the ad layer during a break, so it stays clickable. */
+  body.break #stageWrap{
+    z-index:30;
+    transform:translate(-20px,20px) scale(var(--mini-scale));
+    border-radius:calc(14px / var(--mini-scale));
+    box-shadow:0 0 0 calc(2px / var(--mini-scale)) rgba(255,122,89,.9),
+               0 calc(26px / var(--mini-scale)) calc(64px / var(--mini-scale)) rgba(0,0,0,.65);
+  }
+
+  #blackout{
+    position:fixed;inset:0;z-index:10;background:var(--void);
+    opacity:0;pointer-events:none;transition:opacity .45s;
+  }
+  body.break #blackout{opacity:1}
+
+  /* ---------- warning ---------- */
+  #warn{
+    position:fixed;top:20px;right:20px;z-index:60;width:var(--mini-w);max-width:calc(100vw - 40px);
+    background:rgba(16,22,31,.94);border:1px solid #2c3a4d;border-radius:12px;padding:13px 15px;
+    box-shadow:0 20px 50px rgba(0,0,0,.5);backdrop-filter:blur(8px);
+    opacity:0;transform:translateY(-14px);pointer-events:none;transition:opacity .3s, transform .3s;
+  }
+  #warn.up{opacity:1;transform:none}
+  #warn .line{display:flex;align-items:baseline;gap:10px}
+  #warn strong{font-size:14px;font-weight:600;letter-spacing:-.01em}
+  #warn .num{margin-left:auto;font-size:21px;font-weight:650;color:var(--accent);font-variant-numeric:tabular-nums}
+  #warn p{margin:4px 0 9px;font-size:12.5px;color:var(--dim);line-height:1.45}
+  #warn .track{height:3px;background:#222c3a;border-radius:3px;overflow:hidden}
+  #warn .fill{height:100%;background:var(--accent);transform-origin:left}
+
+  /* ---------- ad ---------- */
+  /* Sits below the mini player's corner so nothing gets covered. */
+  #adWrap{
+    position:fixed;inset:0;z-index:20;display:none;
+    align-items:flex-start;justify-content:center;
+    padding:calc(var(--mini-h) + 52px) 24px 24px;
+    pointer-events:none;
+  }
+  body.break #adWrap{display:flex}
+  #adStage{width:min(680px,calc(100vw - 48px));pointer-events:auto}
+  #adSurface{
+    width:100%;background:#0f141d;border:1px solid #1e2836;border-radius:14px;
+    overflow:hidden;display:flex;align-items:center;justify-content:center;
+    min-height:180px;position:relative;
+  }
+  #adSurface video,#adSurface img{
+    width:100%;max-height:min(46vh,380px);display:block;background:#000;object-fit:contain;
+  }
+  .adcard{padding:34px 30px;text-align:center;max-width:50ch}
+  .adcard h2{margin:0 0 10px;font-size:24px;line-height:1.2;letter-spacing:-.015em;font-weight:650}
+  .adcard p{margin:0 0 20px;font-size:15px;line-height:1.55;color:var(--dim)}
+  .adcard a{
+    display:inline-block;padding:11px 22px;border-radius:9px;background:var(--accent);
+    color:#2a0d04;text-decoration:none;font-size:14px;font-weight:650;
+  }
+  #unmute{
+    position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(8,12,18,.55);border:0;color:var(--text);font:inherit;font-size:15px;
+    font-weight:600;cursor:pointer;gap:9px;
+  }
+  #unmute.show{display:flex}
+  #unmute span{
+    background:rgba(255,122,89,.95);color:#2a0d04;padding:11px 20px;border-radius:999px;
+  }
+  #adBar{display:flex;align-items:center;gap:13px;margin-top:13px;font-size:13px;color:var(--dim)}
+  #adBar .track{flex:1;height:4px;background:#222c3a;border-radius:4px;overflow:hidden}
+  #adBar .fill{height:100%;width:0;background:var(--accent);transition:width .2s linear}
+  #adBar .count{font-variant-numeric:tabular-nums;color:var(--text);font-weight:600;min-width:5ch;text-align:right}
+
+  /* ---------- mini player label ---------- */
+  #miniTag{
+    position:fixed;z-index:50;right:20px;top:calc(20px + var(--mini-h) + 10px);
+    width:var(--mini-w);max-width:calc(100vw - 40px);
+    display:none;align-items:center;gap:8px;font-size:12px;color:var(--dim);
+    text-shadow:0 1px 3px rgba(0,0,0,.8);
+  }
+  body.break #miniTag{display:flex}
+  #miniTag i{width:7px;height:7px;border-radius:50%;background:#4ade9b;animation:pulse 2s infinite;font-style:normal}
+  @keyframes pulse{50%{opacity:.3}}
+
+  @media (max-width:640px){
+    #adStage{width:calc(100vw - 28px)}
+    #adWrap{padding-left:14px;padding-right:14px}
+    .adcard{padding:26px 20px}
+    .adcard h2{font-size:20px}
+  }
+</style>
+</head>
+<body>
+
+<div id="stageWrap">
+  <iframe id="frame" title="Echo's Games" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write"></iframe>
+</div>
+
+<div id="blackout"></div>
+
+<div id="warn" role="status">
+  <div class="line">
+    <strong>Ad break starting</strong>
+    <span class="num" id="warnNum">10</span>
+  </div>
+  <p>Keep playing in the corner — nothing gets interrupted.</p>
+  <div class="track"><div class="fill" id="warnFill"></div></div>
+</div>
+
+<div id="adWrap">
+  <div id="adStage">
+    <div id="adSurface">
+      <button id="unmute" type="button"><span>Tap for sound</span></button>
+    </div>
+    <div id="adBar">
+      <span>Advertisement</span>
+      <span class="track"><span class="fill" id="adFill"></span></span>
+      <span class="count" id="adCount">0:30</span>
+    </div>
+  </div>
+</div>
+
+<div id="miniTag"><i></i><span>Still playing — click to keep going</span></div>
+
+<script>
+/* ============================================================
+   EDIT THIS BLOCK. Everything else can stay as it is.
+   ============================================================ */
+
+var SITE = 'https://lgbtqhappiness-git-main-echos-games.vercel.app';
+
+var EVERY_MINUTES = 15;   // how often a break plays
+var AD_SECONDS    = 30;   // how long it lasts (video ads use their own length)
+var WARN_SECONDS  = 10;   // countdown before the break, 0 to turn off
+
+var ADS = [
+  {
+    headline: 'Your ad here',
+    body: 'Swap this out for a video, an image, or your own message.',
+    cta:  'Learn more',
+    href: ''
+  }
+  // A video ad:
+  //   { video: 'https://example.com/spot.mp4', href: 'https://example.com' }
+  // An image ad:
+  //   { image: 'https://example.com/banner.jpg', href: 'https://example.com' }
+  // Optional on any of them:
+  //   weight: 2,  impressionUrl: '...',  clickUrl: '...'
+];
+
+/* ============================================================ */
+
+(function(){
+  'use strict';
+
+  var d = document;
+  function $(id){ return d.getElementById(id); }
+  function clamp(n,lo,hi){ return Math.max(lo, Math.min(hi, n)); }
+  function mmss(ms){
+    var t = Math.max(0, Math.ceil(ms/1000));
+    return Math.floor(t/60) + ':' + String(t%60).padStart(2,'0');
+  }
+
+  var frame   = $('frame');
+  var warnEl  = $('warn');
+  var surface = $('adSurface');
+  var unmute  = $('unmute');
+
+  var state = 'idle';          // idle | warning | break
+  var nextAt = Date.now() + EVERY_MINUTES * 60000;
+  var startedAt = 0, endsAt = 0;
+  var lastId = null;
+  var video = null;
+  var soundUnlocked = false;
+
+  /* ---------- embed ---------- */
+
+  frame.src = SITE;
+
+  function siteOrigin(){
+    try { return new URL(SITE).origin; } catch(e){ return '*'; }
+  }
+
+  // Cross-origin frames can't be touched directly, so we ask nicely.
+  // Needs adbreak-client.js running inside the embedded site.
+  function tell(type, value){
+    if (!frame.contentWindow) return;
+    var msg = { type:type };
+    if (value !== undefined) msg.value = value;
+    try { frame.contentWindow.postMessage(msg, siteOrigin()); } catch(e){}
+    try { frame.contentWindow.postMessage(msg, '*'); } catch(e){}
+  }
+
+  /* ---------- mini player sizing ---------- */
+
+  function sizeMini(){
+    var w = clamp(window.innerWidth * 0.30, 180, 360);
+    var scale = w / window.innerWidth;
+    var s = d.documentElement.style;
+    s.setProperty('--mini-scale', scale.toFixed(4));
+    s.setProperty('--mini-w', Math.round(w) + 'px');
+    s.setProperty('--mini-h', Math.round(window.innerHeight * scale) + 'px');
+  }
+  sizeMini();
+  window.addEventListener('resize', sizeMini);
+
+  /* ---------- picking an ad ---------- */
+
+  function pick(){
+    var list = (ADS || []).filter(function(a){ return a && typeof a === 'object'; });
+    if (!list.length) return null;
+    var bag = [];
+    list.forEach(function(a, i){
+      a._id = a._id || ('ad'+i);
+      var n = Number(a.weight) > 0 ? Number(a.weight) : 1;
+      for (var k=0;k<n;k++) bag.push(a);
+    });
+    var c, guard = 0;
+    do { c = bag[Math.floor(Math.random()*bag.length)]; guard++; }
+    while (bag.length > 1 && c._id === lastId && guard < 12);
+    lastId = c._id;
+    return c;
+  }
+
+  function beacon(url){ if (url){ try { (new Image(1,1)).src = url; } catch(e){} } }
+
+  /* ---------- rendering ---------- */
+
+  function render(ad){
+    surface.innerHTML = '';
+    surface.appendChild(unmute);
+    unmute.classList.remove('show');
+    video = null;
+    var span = AD_SECONDS * 1000;
+
+    if (ad.video){
+      var v = d.createElement('video');
+      v.src = ad.video;
+      v.playsInline = true;
+      v.autoplay = true;
+      v.muted = false;
+      surface.insertBefore(v, unmute);
+      video = v;
+
+      v.addEventListener('loadedmetadata', function(){
+        if (isFinite(v.duration) && v.duration > 1){
+          endsAt = startedAt + v.duration * 1000;
+        }
+      });
+      v.addEventListener('ended', endBreak);
+
+      // Browsers block sound until someone has clicked this page. Clicking
+      // inside the embedded site doesn't count, so fall back to muted.
+      var p = v.play();
+      if (p && p.catch) p.catch(function(){
+        v.muted = true;
+        unmute.classList.add('show');
+        v.play().catch(function(){});
+      });
+
+      if (ad.href){
+        v.style.cursor = 'pointer';
+        v.addEventListener('click', function(){
+          beacon(ad.clickUrl);
+          window.open(ad.href, '_blank', 'noopener');
+        });
+      }
+    } else if (ad.image){
+      var img = d.createElement('img');
+      img.src = ad.image;
+      img.alt = ad.headline || 'Advertisement';
+      if (ad.href){
+        var a = d.createElement('a');
+        a.href = ad.href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.style.cssText = 'display:block;width:100%';
+        a.addEventListener('click', function(){ beacon(ad.clickUrl); });
+        a.appendChild(img);
+        surface.insertBefore(a, unmute);
+      } else {
+        surface.insertBefore(img, unmute);
+      }
+    } else {
+      var card = d.createElement('div');
+      card.className = 'adcard';
+      if (ad.headline){ var h = d.createElement('h2'); h.textContent = ad.headline; card.appendChild(h); }
+      if (ad.body){ var p2 = d.createElement('p'); p2.textContent = ad.body; card.appendChild(p2); }
+      if (ad.cta && ad.href){
+        var btn = d.createElement('a');
+        btn.textContent = ad.cta;
+        btn.href = ad.href; btn.target = '_blank'; btn.rel = 'noopener noreferrer';
+        btn.addEventListener('click', function(){ beacon(ad.clickUrl); });
+        card.appendChild(btn);
+      }
+      surface.insertBefore(card, unmute);
+    }
+
+    beacon(ad.impressionUrl);
+    return span;
+  }
+
+  unmute.addEventListener('click', function(){
+    soundUnlocked = true;
+    unmute.classList.remove('show');
+    if (video){ video.muted = false; video.play().catch(function(){}); }
+  });
+
+  // Any click on this page counts as permission for later breaks.
+  d.addEventListener('pointerdown', function(){ soundUnlocked = true; }, {once:true});
+
+  /* ---------- break lifecycle ---------- */
+
+  function startBreak(){
+    if (state === 'break') return;
+    state = 'break';
+    warnEl.classList.remove('up');
+    startedAt = Date.now();
+
+    sizeMini();
+    d.body.classList.add('break');
+
+    // Silence the site so the ad is the only thing making noise.
+    // It keeps running and stays clickable in the corner.
+    tell('adbreak:mute', true);
+
+    var ad = pick();
+    var span = ad ? render(ad) : AD_SECONDS * 1000;
+    endsAt = startedAt + span;
+  }
+
+  function endBreak(){
+    if (state !== 'break') return;
+    state = 'idle';
+    d.body.classList.remove('break');
+    tell('adbreak:mute', false);
+
+    if (video){ try { video.pause(); } catch(e){} video = null; }
+    setTimeout(function(){
+      if (state === 'idle'){
+        surface.innerHTML = '';
+        surface.appendChild(unmute);
+        unmute.classList.remove('show');
+      }
+    }, 550);
+
+    nextAt = Date.now() + EVERY_MINUTES * 60000;
+  }
+
+  /* ---------- clock ---------- */
+
+  setInterval(function(){
+    var now = Date.now();
+
+    if (state === 'break'){
+      var left = endsAt - now;
+      var total = Math.max(1, endsAt - startedAt);
+      $('adCount').textContent = mmss(left);
+      $('adFill').style.width = clamp(100 * (1 - left/total), 0, 100) + '%';
+      if (left <= 0) endBreak();
+      return;
+    }
+
+    var until = nextAt - now;
+
+    if (state === 'warning'){
+      $('warnNum').textContent = Math.max(0, Math.ceil(until/1000));
+      $('warnFill').style.transform = 'scaleX(' + clamp(until/(WARN_SECONDS*1000), 0, 1) + ')';
+      if (until <= 0) startBreak();
+      return;
+    }
+
+    if (WARN_SECONDS > 0 && until <= WARN_SECONDS*1000){
+      state = 'warning';
+      warnEl.classList.add('up');
+      return;
+    }
+    if (until <= 0) startBreak();
+  }, 200);
+
+  // Hidden: press B to fire a break now. Handy while you're testing.
+  d.addEventListener('keydown', function(e){
+    if ((e.key === 'b' || e.key === 'B') && e.shiftKey && e.altKey){
+      warnEl.classList.remove('up');
+      state = 'idle';
+      startBreak();
+    }
+  });
+})();
+</script>
+</body>
+</html>
